@@ -46,6 +46,7 @@ import datetime
 import time
 import torch
 from tqdm import tqdm
+from comfy.cli_args import args
 
 p310_plus = (sys.version_info >= (3, 10))
 
@@ -145,6 +146,8 @@ NODE_FILE = os.path.abspath(__file__)
 MIDAS_INSTALLED = False
 CUSTOM_NODES_DIR = comfy_paths.folder_names_and_paths["custom_nodes"][0][0]
 MODELS_DIR =  comfy_paths.models_dir
+if args.just_ui:
+    MODELS_DIR = os.path.join(os.path.dirname(args.data_dir), 'models')
 WAS_SUITE_ROOT = os.path.dirname(NODE_FILE)
 WAS_CONFIG_DIR = os.environ.get('WAS_CONFIG_DIR', WAS_SUITE_ROOT)
 WAS_DATABASE = os.path.join(WAS_CONFIG_DIR, 'was_suite_settings.json')
