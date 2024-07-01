@@ -1925,7 +1925,6 @@ class WAS_Tools_Class():
         img = img.filter(ImageFilter.GaussianBlur(radius=blur))
 
         return img
-    
 
     # Version 2 optimized based on Mark Setchell's ideas
     def gradient_map(self, image, gradient_map, reverse=False):
@@ -4882,7 +4881,131 @@ class WAS_Image_Color_Palette:
             return (pil2tensor(palette_image), [palette,])
 
 
+# HEX TO HSL
+
+class WAS_Hex_to_HSL:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "hex_color": ("STRING", {"default": "#FF0000"}),
+            }, 
+            "optional": {
+                "include_alpha": ("BOOLEAN", {"default": False})
+            }
+        }
+    
+    RETURN_TYPES = ("INT", "INT", "INT", "FLOAT", "STRING")
+    RETURN_NAMES = ("hue", "saturation", "lightness", "alpha", "hsl")
+
+    FUNCTION = "hex_to_hsl"
+    CATEGORY = "WAS Suite/Utilities"
+
+    @staticmethod
+    def hex_to_hsl(hex_color, include_alpha=False):
+        if hex_color.startswith("#"):
+            hex_color = hex_color[1:]
+        
+        red = int(hex_color[0:2], 16) / 255.0
+        green = int(hex_color[2:4], 16) / 255.0
+        blue = int(hex_color[4:6], 16) / 255.0
+        alpha = int(hex_color[6:8], 16) / 255.0 if include_alpha and len(hex_color) == 8 else 1.0
+        max_val = max(red, green, blue)
+        min_val = min(red, green, blue)
+        delta = max_val - min_val
+        luminance = (max_val + min_val) / 2.0
+
+        if delta == 0:
+            hue = 0
+            saturation = 0
+        else:
+            saturation = delta / (1 - abs(2 * luminance - 1))
+            if max_val == red:
+                hue = ((green - blue) / delta) % 6
+            elif max_val == green:
+                hue = (blue - red) / delta + 2
+            elif max_val == blue:
+                hue = (red - green) / delta + 4
+            hue *= 60
+            if hue < 0:
+                hue += 360
+
+        luminance = luminance * 100
+        saturation = saturation * 100
+
+        hsl_string = f'hsl({round(hue)}, {round(saturation)}%, {round(luminance)}%)' if not include_alpha else f'hsla({round(hue)}, {round(saturation)}%, {round(luminance)}%, {round(alpha, 2)})'
+        output = (round(hue), round(saturation), round(luminance), round(alpha, 2), hsl_string)
+        
+        return output
+
+
+# HSL TO HEX
+
+
+class WAS_HSL_to_Hex:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "hsl_color": ("STRING", {"default": "hsl(0, 100%, 50%)"}),
+            }
+        }
+    
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("hex_color",)
+
+    FUNCTION = "hsl_to_hex"
+    CATEGORY = "WAS Suite/Utilities"
+
+    @staticmethod
+    def hsl_to_hex(hsl_color):
+        import re
+
+        hsl_pattern = re.compile(r'hsla?\(\s*(\d+),\s*(\d+)%?,\s*(\d+)%?(?:,\s*([\d.]+))?\s*\)')
+        match = hsl_pattern.match(hsl_color)
+
+        if not match:
+            raise ValueError("Invalid HSL(A) color format")
+
+        h, s, l = map(int, match.groups()[:3])
+        a = float(match.groups()[3]) if match.groups()[3] else 1.0
+
+        s /= 100
+        l /= 100
+
+        c = (1 - abs(2 * l - 1)) * s
+        x = c * (1 - abs((h / 60) % 2 - 1))
+        m = l - c/2
+
+        if 0 <= h < 60:
+            r, g, b = c, x, 0
+        elif 60 <= h < 120:
+            r, g, b = x, c, 0
+        elif 120 <= h < 180:
+            r, g, b = 0, c, x
+        elif 180 <= h < 240:
+            r, g, b = 0, x, c
+        elif 240 <= h < 300:
+            r, g, b = x, 0, c
+        elif 300 <= h < 360:
+            r, g, b = c, 0, x
+        else:
+            r, g, b = 0, 0, 0
+
+        r = int((r + m) * 255)
+        g = int((g + m) * 255)
+        b = int((b + m) * 255)
+        alpha = int(a * 255)
+
+        hex_color = f'#{r:02X}{g:02X}{b:02X}'
+        if a < 1:
+            hex_color += f'{alpha:02X}'
+
+        return (hex_color,)
+
+
 # IMAGE ANALYZE
+
 
 class WAS_Image_Analyze:
     def __init__(self):
@@ -5365,7 +5488,7 @@ class WAS_Image_Padding:
 
     def image_padding(self, image, feathering, left_padding, right_padding, top_padding, bottom_padding, feather_second_pass=True):
         padding = self.apply_image_padding(tensor2pil(
-            image), left_padding, right_padding, top_padding, bottom_padding, feathering, second_pass=True)
+            image), left_padding, right_padding, top_padding, bottom_padding, feathering, second_pass=feather_second_pass)
         return (pil2tensor(padding[0]), pil2tensor(padding[1]))
 
     def apply_image_padding(self, image, left_pad=100, right_pad=100, top_pad=100, bottom_pad=100, feather_radius=50, second_pass=True):
@@ -7168,7 +7291,9 @@ class WAS_Image_Save:
             },
         }
 
-    RETURN_TYPES = ()
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
+    
     FUNCTION = "was_save_images"
 
     OUTPUT_NODE = True
@@ -7363,9 +7488,9 @@ class WAS_Image_Save:
                 results.append(image_data)
 
         if show_previews == 'true':
-            return {"ui": {"images": results}}
+            return {"ui": {"images": results}, "result": (images,)}
         else:
-            return {"ui": {"images": []}}
+            return {"ui": {"images": []}, "result": (images,)}
 
     def get_subfolder_path(self, image_path, output_path):
         output_parts = output_path.strip(os.sep).split(os.sep)
@@ -9507,7 +9632,7 @@ class WAS_Text_Multiline:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": ("STRING", {"default": '', "multiline": True, "dynamicPrompts": False}),
+                "text": ("STRING", {"default": '', "multiline": True, "dynamicPrompts": True}),
             }
         }
     RETURN_TYPES = (TEXT_TYPE,)
@@ -9530,6 +9655,29 @@ class WAS_Text_Multiline:
 
         return (new_text, )
 
+
+class WAS_Text_Multiline_Raw:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"default": '', "multiline": True, "dynamicPrompts": False}),
+            }
+        }
+    RETURN_TYPES = (TEXT_TYPE,)
+    FUNCTION = "text_multiline"
+
+    CATEGORY = "WAS Suite/Text"
+
+    def text_multiline(self, text):
+        tokens = TextTokens()
+        new_text = tokens.parseTokens(text)
+
+        return (new_text, )
+    
 
 # Text List Concatenate Node
 
@@ -10097,23 +10245,23 @@ class WAS_Text_Concatenate:
                 "clean_whitespace": (["true", "false"],),
             },
             "optional": {
-                "text_a": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "text_b": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "text_c": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "text_d": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text_a": ("STRING", {"forceInput": True}),
+                "text_b": ("STRING", {"forceInput": True}),
+                "text_c": ("STRING", {"forceInput": True}),
+                "text_d": ("STRING", {"forceInput": True}),
             }
         }
 
-    RETURN_TYPES = (TEXT_TYPE,)
+    RETURN_TYPES = ("STRING",)
     FUNCTION = "text_concatenate"
 
     CATEGORY = "WAS Suite/Text"
 
     def text_concatenate(self, delimiter, clean_whitespace, **kwargs):
-        text_inputs: list[str] = []
+        text_inputs = []
 
         # Handle special case where delimiter is "\n" (literal newline).
-        if delimiter == "\\n":
+        if delimiter in ("\n", "\\n"):
             delimiter = "\n"
 
         # Iterate over the received inputs in sorted order.
@@ -10137,6 +10285,7 @@ class WAS_Text_Concatenate:
         merged_text = delimiter.join(text_inputs)
 
         return (merged_text,)
+
 
 
 # Text Find
@@ -10235,6 +10384,51 @@ class WAS_Text_Shuffle:
         return (new_text, )
 
 
+# Text Sort
+
+class WAS_Text_Sort:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "separator": ("STRING", {"default": ', ', "multiline": False}),
+            }
+        }
+
+    RETURN_TYPES = (TEXT_TYPE,)
+    FUNCTION = "sort"
+
+    CATEGORY = "WAS Suite/Text/Operations"
+
+    def sort(self, text, separator):
+        tokens = WAS_Text_Sort.split_using_protected_groups(text.strip(separator + " \t\n\r"), separator.strip())
+        sorted_tokens = sorted(tokens, key=WAS_Text_Sort.token_without_leading_brackets)
+        return (separator.join(sorted_tokens), )
+
+    @staticmethod
+    def token_without_leading_brackets(token):
+        return token.replace("\\(", "\0\1").replace("(", "").replace("\0\1", "(").strip()
+
+    @staticmethod
+    def split_using_protected_groups(text, separator):
+        protected_groups = ""
+        nesting_level = 0
+        for char in text:
+            if char == "(": nesting_level += 1
+            if char == ")": nesting_level -= 1
+
+            if char == separator and nesting_level > 0:
+                protected_groups += "\0"
+            else:
+                protected_groups += char
+
+        return list(map(lambda t: t.replace("\0", separator).strip(), protected_groups.split(separator)))
+
+
 
 # Text Search and Replace
 
@@ -10269,7 +10463,6 @@ class WAS_Search_and_Replace_Input:
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         return float("NaN")
-
 
 
 # Text Search and Replace By Dictionary
@@ -10355,7 +10548,7 @@ class WAS_Text_Parse_NSP:
         return (new_text, )
 
 
-# TEXT SEARCH AND REPLACE
+# TEXT SAVE
 
 class WAS_Text_Save:
     def __init__(self):
@@ -10368,9 +10561,12 @@ class WAS_Text_Save:
                 "text": ("STRING", {"forceInput": True}),
                 "path": ("STRING", {"default": './ComfyUI/output/[time(%Y-%m-%d)]', "multiline": False}),
                 "filename_prefix": ("STRING", {"default": "ComfyUI"}),
-                "filename_delimiter": ("STRING", {"default":"_"}),
-                "filename_number_padding": ("INT", {"default":4, "min":0, "max":9, "step":1}),
-
+                "filename_delimiter": ("STRING", {"default": "_"}),
+                "filename_number_padding": ("INT", {"default": 4, "min": 0, "max": 9, "step": 1}),
+            },
+            "optional": {
+                "file_extension": ("STRING", {"default": ".txt"}),
+                "encoding": ("STRING", {"default": "utf-8"})
             }
         }
 
@@ -10379,8 +10575,7 @@ class WAS_Text_Save:
     FUNCTION = "save_text_file"
     CATEGORY = "WAS Suite/IO"
 
-    def save_text_file(self, text, path, filename_prefix='ComfyUI', filename_delimiter='_', filename_number_padding=4):
-
+    def save_text_file(self, text, path, filename_prefix='ComfyUI', filename_delimiter='_', filename_number_padding=4, file_extension='.txt', encoding='utf-8'):
         tokens = TextTokens()
         path = tokens.parseTokens(path)
         filename_prefix = tokens.parseTokens(filename_prefix)
@@ -10397,54 +10592,40 @@ class WAS_Text_Save:
 
         delimiter = filename_delimiter
         number_padding = int(filename_number_padding)
-        file_extension = '.txt'
         filename = self.generate_filename(path, filename_prefix, delimiter, number_padding, file_extension)
         file_path = os.path.join(path, filename)
-
-        self.writeTextFile(file_path, text)
-
+        self.write_text_file(file_path, text, encoding)
         update_history_text_files(file_path)
-
-        return (text, { "ui": { "string": text } } )
+        return (text, {"ui": {"string": text}})
 
     def generate_filename(self, path, prefix, delimiter, number_padding, extension):
-        # Adjust the regex pattern to match one or more digits without fixed padding
-        pattern = f"{re.escape(prefix)}{re.escape(delimiter)}(\\d+)"
-        existing_counters = [
-            int(re.search(pattern, filename).group(1))
-            for filename in os.listdir(path)
-            if re.match(pattern, filename)
-        ]
-        existing_counters.sort(reverse=True)
-
-        if existing_counters:
-            counter = existing_counters[0] + 1
+        if number_padding == 0:
+            # If number_padding is 0, don't use a numerical suffix
+            filename = f"{prefix}{extension}"
         else:
-            counter = 1
-
-        # Adjust the format string based on number_padding
-        if number_padding > 0:
-            filename = f"{prefix}{delimiter}{counter:0{number_padding}}{extension}"
-        else:
-            filename = f"{prefix}{delimiter}{counter}{extension}"
-
-        # Ensure the generated filename does not already exist
-        while os.path.exists(os.path.join(path, filename)):
-            counter += 1
-            if number_padding > 0:
-                filename = f"{prefix}{delimiter}{counter:0{number_padding}}{extension}"
+            pattern = f"{re.escape(prefix)}{re.escape(delimiter)}(\\d{{{number_padding}}})"
+            existing_counters = [
+                int(re.search(pattern, filename).group(1))
+                for filename in os.listdir(path)
+                if re.match(pattern, filename)
+            ]
+            existing_counters.sort(reverse=True)
+            if existing_counters:
+                counter = existing_counters[0] + 1
             else:
-                filename = f"{prefix}{delimiter}{counter}{extension}"
-
+                counter = 1
+            filename = f"{prefix}{delimiter}{counter:0{number_padding}}{extension}"
+            while os.path.exists(os.path.join(path, filename)):
+                counter += 1
+                filename = f"{prefix}{delimiter}{counter:0{number_padding}}{extension}"
         return filename
 
-    def writeTextFile(self, file, content):
+    def write_text_file(self, file, content, encoding):
         try:
-            with open(file, 'w', encoding='utf-8', newline='\n') as f:
+            with open(file, 'w', encoding=encoding, newline='\n') as f:
                 f.write(content)
         except OSError:
             cstr(f"Unable to save file `{file}`").error.print()
-
 
 
 # TEXT FILE HISTORY NODE
@@ -10855,15 +11036,16 @@ class WAS_Text_Load_Line_From_File:
             self.file_path = file_path
             self.lines = []
             self.index = 0
-            self.load_file(file_path, label)
+            self.label = label
+            self.load_file(file_path)
 
-        def load_file(self, file_path, label):
-            stored_file_path = self.WDB.get('TextBatch Paths', label)
-            stored_index = self.WDB.get('TextBatch Counters', label)
+        def load_file(self, file_path):
+            stored_file_path = self.WDB.get('TextBatch Paths', self.label)
+            stored_index = self.WDB.get('TextBatch Counters', self.label)
             if stored_file_path != file_path:
                 self.index = 0
-                self.WDB.insert('TextBatch Counters', label, 0)
-                self.WDB.insert('TextBatch Paths', label, file_path)
+                self.WDB.insert('TextBatch Counters', self.label, 0)
+                self.WDB.insert('TextBatch Paths', self.label, file_path)
             else:
                 self.index = stored_index
             with open(file_path, 'r', encoding="utf-8", newline='\n') as file:
@@ -10874,7 +11056,7 @@ class WAS_Text_Load_Line_From_File:
 
         def set_line_index(self, index):
             self.index = index
-            self.WDB.insert('TextBatch Counters', 'TextBatch', self.index)
+            self.WDB.insert('TextBatch Counters', self.label, self.index)
 
         def get_next_line(self):
             if self.index >= len(self.lines):
@@ -10896,7 +11078,7 @@ class WAS_Text_Load_Line_From_File:
             return line, self.lines
 
         def store_index(self):
-            self.WDB.insert('TextBatch Counters', 'TextBatch', self.index)
+            self.WDB.insert('TextBatch Counters', self.label, self.index)
 
 
 class WAS_Text_To_String:
@@ -11078,9 +11260,7 @@ class WAS_BLIP_Analyze_Image:
 
         captions = []
         for image in images:
-            
             pil_image = tensor2pil(image).convert("RGB")
-            
             if mode == "caption":
                 cap = blip_model.generate_caption(image=pil_image, min_length=min_length, max_length=max_length, num_beams=num_beams, no_repeat_ngram_size=no_repeat_ngram_size, early_stopping=early_stopping)
                 captions.append(cap)
@@ -13823,6 +14003,8 @@ NODE_CLASS_MAPPINGS = {
     "Logic Comparison XOR": WAS_Logical_XOR,
     "Logic NOT": WAS_Logical_NOT,
     "Lora Loader": WAS_Lora_Loader,
+    "Hex to HSL": WAS_Hex_to_HSL,
+    "HSL to Hex": WAS_HSL_to_Hex,
     "Image SSAO (Ambient Occlusion)": WAS_Image_Ambient_Occlusion,
     "Image SSDO (Direct Occlusion)": WAS_Image_Direct_Occlusion,
     "Image Analyze": WAS_Image_Analyze,
@@ -13979,6 +14161,7 @@ NODE_CLASS_MAPPINGS = {
     "Text List to Text": WAS_Text_List_to_Text,
     "Text Load Line From File": WAS_Text_Load_Line_From_File,
     "Text Multiline": WAS_Text_Multiline,
+    "Text Multiline (Code Compatible)": WAS_Text_Multiline_Raw,
     "Text Parse A1111 Embeddings": WAS_Text_Parse_Embeddings_By_Name,
     "Text Parse Noodle Soup Prompts": WAS_Text_Parse_NSP,
     "Text Parse Tokens": WAS_Text_Parse_Tokens,
@@ -13987,6 +14170,7 @@ NODE_CLASS_MAPPINGS = {
     "Text String": WAS_Text_String,
     "Text Contains": WAS_Text_Contains,
     "Text Shuffle": WAS_Text_Shuffle,
+    "Text Sort": WAS_Text_Sort,
     "Text to Conditioning": WAS_Text_to_Conditioning,
     "Text to Console": WAS_Text_to_Console,
     "Text to Number": WAS_Text_To_Number,
