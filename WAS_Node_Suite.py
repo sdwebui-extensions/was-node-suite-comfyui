@@ -334,7 +334,13 @@ if was_config.__contains__('webui_styles'):
 def packages(versions=False):
     import sys
     import subprocess
-    return [( r.decode().split('==')[0] if not versions else r.decode() ) for r in subprocess.check_output([sys.executable, '-s', '-m', 'pip', 'freeze']).split()]
+    try:
+        result = subprocess.check_output([sys.executable, '-m', 'pip', 'freeze'], stderr=subprocess.STDOUT)
+        lines = result.decode().splitlines()
+        return [line if versions else line.split('==')[0] for line in lines]
+    except subprocess.CalledProcessError as e:
+        print("An error occurred while fetching packages:", e.output.decode())
+        return []
 
 def install_package(package, uninstall_first: Union[List[str], str] = None):
     if os.getenv("WAS_BLOCK_AUTO_INSTALL", 'False').lower() in ('true', '1', 't'):
@@ -1927,33 +1933,42 @@ class WAS_Tools_Class():
         return img
 
     # Version 2 optimized based on Mark Setchell's ideas
-    def gradient_map(self, image, gradient_map, reverse=False):
+    def gradient_map(self, image, gradient_map_input, reverse=False):
 
         # Reverse the image
         if reverse:
-            gradient_map = gradient_map.transpose(Image.FLIP_LEFT_RIGHT)
+            gradient_map_input = gradient_map_input.transpose(Image.FLIP_LEFT_RIGHT)
 
         # Convert image to Numpy array and average RGB channels
-        na = np.array(image)
-        grey = np.mean(na, axis=2).astype(np.uint8)
+        # grey = self.greyscale(np.array(image))
+        grey = np.array(image.convert('L'))
 
         # Convert gradient map to Numpy array
-        cmap = np.array(gradient_map.convert('RGB'))
+        cmap = np.array(gradient_map_input.convert('RGB'))
 
-        # Make output image, same height and width as grey image, but 3-channel RGB
-        result = np.zeros((*grey.shape, 3), dtype=np.uint8)
+        # smush the map into the proper size -- 256 gradient colors
+        cmap = cv2.resize(cmap, (256, 256))
 
-        # Reshape grey to match the shape of result
-        grey_reshaped = grey.reshape(-1)
+        # lop off a single row for the LUT mapper
+        cmap = cmap[0,:,:].reshape((256, 1, 3)).astype(np.uint8)
 
-        # Take entries from RGB gradient map according to grayscale values in image
-        np.take(cmap.reshape(-1, 3), grey_reshaped, axis=0, out=result.reshape(-1, 3))
+        # map with our "custom" LUT
+        result = cv2.applyColorMap(grey, cmap)
 
         # Convert result to PIL image
-        result_image = Image.fromarray(result)
+        return Image.fromarray(result)
 
-        return result_image
-
+    def greyscale(self, image):
+        if image.dtype in [np.float16, np.float32, np.float64]:
+            image = np.clip(image * 255, 0, 255).astype(np.uint8)
+        cc = image.shape[2] if image.ndim == 3 else 1
+        if cc == 1:
+            return image
+        typ = cv2.COLOR_BGR2HSV
+        if cc == 4:
+            typ = cv2.COLOR_BGRA2GRAY
+        image = cv2.cvtColor(image, typ)[:,:,2]
+        return np.expand_dims(image, -1)
 
     # Generate Perlin Noise (Finally in house version)
 
@@ -4889,12 +4904,12 @@ class WAS_Hex_to_HSL:
         return {
             "required": {
                 "hex_color": ("STRING", {"default": "#FF0000"}),
-            }, 
+            },
             "optional": {
                 "include_alpha": ("BOOLEAN", {"default": False})
             }
         }
-    
+
     RETURN_TYPES = ("INT", "INT", "INT", "FLOAT", "STRING")
     RETURN_NAMES = ("hue", "saturation", "lightness", "alpha", "hsl")
 
@@ -4905,7 +4920,7 @@ class WAS_Hex_to_HSL:
     def hex_to_hsl(hex_color, include_alpha=False):
         if hex_color.startswith("#"):
             hex_color = hex_color[1:]
-        
+
         red = int(hex_color[0:2], 16) / 255.0
         green = int(hex_color[2:4], 16) / 255.0
         blue = int(hex_color[4:6], 16) / 255.0
@@ -4935,7 +4950,7 @@ class WAS_Hex_to_HSL:
 
         hsl_string = f'hsl({round(hue)}, {round(saturation)}%, {round(luminance)}%)' if not include_alpha else f'hsla({round(hue)}, {round(saturation)}%, {round(luminance)}%, {round(alpha, 2)})'
         output = (round(hue), round(saturation), round(luminance), round(alpha, 2), hsl_string)
-        
+
         return output
 
 
@@ -4950,7 +4965,7 @@ class WAS_HSL_to_Hex:
                 "hsl_color": ("STRING", {"default": "hsl(0, 100%, 50%)"}),
             }
         }
-    
+
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("hex_color",)
 
@@ -7293,7 +7308,7 @@ class WAS_Image_Save:
 
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("images",)
-    
+
     FUNCTION = "was_save_images"
 
     OUTPUT_NODE = True
@@ -7375,15 +7390,16 @@ class WAS_Image_Save:
             # Delegate metadata/pnginfo
             if extension == 'webp':
                 img_exif = img.getexif()
-                workflow_metadata = ''
-                prompt_str = ''
-                if prompt is not None:
-                    prompt_str = json.dumps(prompt)
-                    img_exif[0x010f] = "Prompt:" + prompt_str
-                if extra_pnginfo is not None:
-                    for x in extra_pnginfo:
-                        workflow_metadata += json.dumps(extra_pnginfo[x])
-                img_exif[0x010e] = "Workflow:" + workflow_metadata
+                if embed_workflow == 'true':
+                    workflow_metadata = ''
+                    prompt_str = ''
+                    if prompt is not None:
+                        prompt_str = json.dumps(prompt)
+                        img_exif[0x010f] = "Prompt:" + prompt_str
+                    if extra_pnginfo is not None:
+                        for x in extra_pnginfo:
+                            workflow_metadata += json.dumps(extra_pnginfo[x])
+                    img_exif[0x010e] = "Workflow:" + workflow_metadata
                 exif_data = img_exif.tobytes()
             else:
                 metadata = PngInfo()
@@ -7499,6 +7515,57 @@ class WAS_Image_Save:
         subfolder_parts = image_parts[len(common_parts):]
         subfolder_path = os.sep.join(subfolder_parts[:-1])
         return subfolder_path
+
+
+# Image Send HTTP
+# Sends images over http
+class WAS_Image_Send_HTTP:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "url": ("STRING", {"default": "example.com"}),
+                "method_type": (["post", "put", "patch"], {"default": "post"}),
+                "request_field_name": ("STRING", {"default": "image"}),
+            },
+            "optional": {
+                "additional_request_headers": ("DICT",)
+            }
+        }
+
+    RETURN_TYPES = ("INT", "STRING")
+    RETURN_NAMES = ("status_code", "result_text")
+
+    FUNCTION = "was_send_images_http"
+    OUTPUT_NODE = True
+
+    CATEGORY = "WAS Suite/IO"
+
+    def was_send_images_http(self, images, url="example.com",
+                             method_type="post",
+                             request_field_name="image",
+                             additional_request_headers=None):
+        from io import BytesIO
+
+        images_to_send = []
+        for idx, image in enumerate(images):
+            i = 255. * image.cpu().numpy()
+            img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
+            byte_io = BytesIO()
+            img.save(byte_io, 'png')
+            byte_io.seek(0)
+            images_to_send.append(
+                (request_field_name, (f"image_{idx}.png", byte_io, "image/png"))
+            )
+        request = requests.Request(url=url, method=method_type.upper(),
+                                   headers=additional_request_headers,
+                                   files=images_to_send)
+        prepped = request.prepare()
+        session = requests.Session()
+
+        response = session.send(prepped)
+        return (response.status_code, response.text,)
 
 
 # LOAD IMAGE NODE
@@ -9645,9 +9712,7 @@ class WAS_Text_Multiline:
         new_text = []
         for line in io.StringIO(text):
             if not line.strip().startswith('#'):
-                if not line.strip().startswith("\n"):
-                    line = line.replace("\n", '')
-                new_text.append(line)
+                new_text.append(line.replace("\n", ''))
         new_text = "\n".join(new_text)
 
         tokens = TextTokens()
@@ -9677,7 +9742,7 @@ class WAS_Text_Multiline_Raw:
         new_text = tokens.parseTokens(text)
 
         return (new_text, )
-    
+
 
 # Text List Concatenate Node
 
@@ -9812,7 +9877,7 @@ class WAS_Text_Parse_Embeddings_By_Name:
         for embeddings_path in comfy_paths.folder_names_and_paths["embeddings"][0]:
             for filename in os.listdir(embeddings_path):
                 basename, ext = os.path.splitext(filename)
-                pattern = re.compile(r'\b{}\b'.format(re.escape(basename)))
+                pattern = re.compile(r'\b(?<!embedding:){}\b'.format(re.escape(basename)))
                 replacement = 'embedding:{}'.format(basename)
                 text = re.sub(pattern, replacement, text)
 
@@ -10679,8 +10744,6 @@ class WAS_Text_File_History:
         lines = []
         for line in io.StringIO(text):
             if not line.strip().startswith('#'):
-                if not line.strip().startswith("\n"):
-                    line = line.replace("\n", '')
                 lines.append(line.replace("\n",''))
         dictionary = {filename: lines}
 
@@ -10940,11 +11003,7 @@ class WAS_Text_Load_From_File:
         lines = []
         for line in io.StringIO(text):
             if not line.strip().startswith('#'):
-                if ( not line.strip().startswith("\n")
-                    or not line.strip().startswith("\r")
-                    or not line.strip().startswith("\r\n") ):
-                    line = line.replace("\n", '').replace("\r",'').replace("\r\n",'')
-                lines.append(line.replace("\n",'').replace("\r",'').replace("\r\n",''))
+                lines.append(line.replace("\n",'').replace("\r",''))
         dictionary = {filename: lines}
 
         return ("\n".join(lines), dictionary)
@@ -11119,7 +11178,7 @@ class WAS_Text_To_Number:
     CATEGORY = "WAS Suite/Text/Operations"
 
     def text_to_number(self, text):
-        if text.replace(".", "").isnumeric():
+        if "." in text:
             number = float(text)
         else:
             number = int(text)
@@ -14053,6 +14112,7 @@ NODE_CLASS_MAPPINGS = {
     "Image Resize": WAS_Image_Rescale,
     "Image Rotate": WAS_Image_Rotate,
     "Image Rotate Hue": WAS_Image_Rotate_Hue,
+    "Image Send HTTP": WAS_Image_Send_HTTP,
     "Image Save": WAS_Image_Save,
     "Image Seamless Texture": WAS_Image_Make_Seamless,
     "Image Select Channel": WAS_Image_Select_Channel,
