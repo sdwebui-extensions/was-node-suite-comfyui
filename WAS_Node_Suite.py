@@ -7306,8 +7306,8 @@ class WAS_Image_Save:
             },
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("images",)
+    RETURN_TYPES = ("IMAGE", "STRING",)
+    RETURN_NAMES = ("images", "files",)
 
     FUNCTION = "was_save_images"
 
@@ -7383,6 +7383,7 @@ class WAS_Image_Save:
             file_extension = "png"
 
         results = list()
+        output_files = list()
         for image in images:
             i = 255. * image.cpu().numpy()
             img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
@@ -7444,6 +7445,7 @@ class WAS_Image_Save:
                              pnginfo=exif_data, optimize=optimize_image)
 
                 cstr(f"Image file saved to: {output_file}").msg.print()
+                output_files.append(output_file)
 
                 if show_history != 'true' and show_previews == 'true':
                     subfolder = self.get_subfolder_path(output_file, original_output)
@@ -7504,9 +7506,9 @@ class WAS_Image_Save:
                 results.append(image_data)
 
         if show_previews == 'true':
-            return {"ui": {"images": results}, "result": (images,)}
+            return {"ui": {"images": results, "files": output_files}, "result": (images, output_files,)}
         else:
-            return {"ui": {"images": []}, "result": (images,)}
+            return {"ui": {"images": []}, "result": (images, output_files,)}
 
     def get_subfolder_path(self, image_path, output_path):
         output_parts = output_path.strip(os.sep).split(os.sep)
@@ -11377,7 +11379,7 @@ class WAS_CLIPSeg:
         return {
             "required": {
                 "image": ("IMAGE",),
-                "text": ("STRING", {"default":"", "multiline": False}),
+                "text": ("STRING", {"default": "", "multiline": False}),
             },
             "optional": {
                 "clipseg_model": ("CLIPSEG_MODEL",),
@@ -11393,7 +11395,8 @@ class WAS_CLIPSeg:
     def CLIPSeg_image(self, image, text=None, clipseg_model=None):
         from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
 
-        image = tensor2pil(image)
+        B, H, W, C = image.shape
+
         cache = os.path.join(MODELS_DIR, 'clipseg')
 
         if clipseg_model:
@@ -11403,16 +11406,30 @@ class WAS_CLIPSeg:
             inputs = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
             model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
 
-        with torch.no_grad():
-            result = model(**inputs(text=text, images=image, padding=True, return_tensors="pt"))
+        if B == 1:
+            image = tensor2pil(image)
+            with torch.no_grad():
+                result = model(**inputs(text=text, images=image, padding=True, return_tensors="pt"))
 
-        tensor = torch.sigmoid(result[0])
-        mask = 1. - (tensor - tensor.min()) / tensor.max()
-        mask = mask.unsqueeze(0)
-        mask = tensor2pil(mask).convert("L")
-        mask = mask.resize(image.size)
+            tensor = torch.sigmoid(result[0])
+            mask = 1. - (tensor - tensor.min()) / tensor.max()
+            mask = mask.unsqueeze(0)
+            mask = tensor2pil(mask).convert("L")
+            mask = mask.resize(image.size)
 
-        return (pil2mask(mask), pil2tensor(ImageOps.invert(mask.convert("RGB"))))
+            return (pil2mask(mask), pil2tensor(ImageOps.invert(mask.convert("RGB"))))
+        else:
+            import torchvision
+            with torch.no_grad():
+                image = image.permute(0, 3, 1, 2)
+                image = image * 255
+                result = model(**inputs(text=[text] * B, images=image, padding=True, return_tensors="pt"))
+                t = torch.sigmoid(result[0])
+                mask = (t - t.min()) / t.max()
+                mask = torchvision.transforms.functional.resize(mask, (H, W))
+                mask: torch.tensor = mask.unsqueeze(-1)
+                mask_img = mask.repeat(1, 1, 1, 3)
+            return (mask, mask_img,)
 
 # CLIPSeg Node
 
