@@ -286,6 +286,9 @@ if was_config and was_config.__contains__('use_legacy_ascii_text'):
         TEXT_TYPE = "ASCII"
         cstr("use_legacy_ascii_text is `True` in `was_suite_config.json`. `ASCII` type is deprecated and the default will be `STRING` in the future.").warning.print()
 
+def is_force_input():
+    return True if TEXT_TYPE == 'STRING' else False
+
 # Convert WebUI Styles - TODO: Convert to PromptStyles class
 if was_config.__contains__('webui_styles'):
 
@@ -6230,7 +6233,10 @@ class WAS_Image_Levels:
             im_arr = np.clip(im_arr, 0, 255)
 
             # mid-level adjustment
-            gamma = math.log(0.5) / math.log((self.mid_level - self.min_level) / (self.max_level - self.min_level))
+            if self.mid_level <= self.min_level:  
+                gamma = 1.0
+            else:
+                gamma = math.log(0.5) / math.log((self.mid_level - self.min_level) / (self.max_level - self.min_level))
             im_arr = np.power(im_arr / 255, gamma) * 255
 
             im_arr = im_arr.astype(np.uint8)
@@ -7352,7 +7358,7 @@ class WAS_Image_Save:
         if not os.path.isabs(output_path):
             output_path = os.path.join(self.output_dir, output_path)
         base_output = os.path.basename(output_path)
-        if output_path.endswith("ComfyUI/output") or output_path.endswith("ComfyUI\output"):
+        if output_path.endswith("ComfyUI/output") or output_path.endswith(r"ComfyUI\output"):
             base_output = ""
 
         # Check output destination
@@ -7445,7 +7451,7 @@ class WAS_Image_Save:
                              quality=quality, lossless=lossless_webp, exif=exif_data)
                 elif extension == 'png':
                     img.save(output_file,
-                             pnginfo=exif_data, optimize=optimize_image)
+                             pnginfo=exif_data, optimize=optimize_image, dpi=(dpi, dpi))
                 elif extension == 'bmp':
                     img.save(output_file)
                 elif extension == 'tiff':
@@ -8752,18 +8758,29 @@ class WAS_Mask_Combine:
     FUNCTION = "combine_masks"
 
     def combine_masks(self, mask_a, mask_b, mask_c=None, mask_d=None, mask_e=None, mask_f=None):
-        masks = [mask_a, mask_b]
-        if mask_c:
-            masks.append(mask_c)
-        if mask_d:
-            masks.append(mask_d)
-        if mask_e:
-            masks.append(mask_e)
-        if mask_f:
-            masks.append(mask_f)
-        combined_mask = torch.sum(torch.stack(masks, dim=0), dim=0)
-        combined_mask = torch.clamp(combined_mask, 0, 1)  # Ensure values are between 0 and 1
-        return (combined_mask, )
+        # Gather all masks in a list
+        masks = [m for m in [mask_a, mask_b, mask_c, mask_d, mask_e, mask_f] if m is not None]
+
+        # Skip any masks that are the known "empty" shape [1, 64, 64] from "Preview" etc
+        # (You can also use a sum-of-pixels check, or other logic.)
+        valid_masks = [m for m in masks if m.shape != (1, 64, 64)]
+        # cstr(f"mask shapes: ... `{valid_masks}`").msg.print()
+
+        # If no valid masks, decide on a fallback
+        if len(valid_masks) == 0:
+            # Could return a zeroed-out mask, or just return mask_a, or raise a warning
+            # Return mask_a so we don't break the graph
+            return (mask_a, )
+
+        # If there is exactly one valid mask, no combine needed
+        if len(valid_masks) == 1:
+            return (valid_masks[0], )
+
+        # Otherwise stack, sum, clamp
+        combined_mask = torch.sum(torch.stack(valid_masks, dim=0), dim=0)
+        combined_mask = torch.clamp(combined_mask, 0, 1)  # Keep values in 0..1
+
+        return (combined_mask,)
 
 class WAS_Mask_Combine_Batch:
 
@@ -10011,7 +10028,7 @@ class WAS_Text_Parse_Embeddings_By_Name:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
             }
         }
     RETURN_TYPES = (TEXT_TYPE,)
@@ -10073,7 +10090,7 @@ class WAS_Dictionary_Convert:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "dictionary_text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)})
+                "dictionary_text": (TEXT_TYPE, {"forceInput": is_force_input()})
             },
         }
     RETURN_TYPES = ("DICT",)
@@ -10302,8 +10319,8 @@ class WAS_Text_Compare:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text_a": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "text_b": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text_a": (TEXT_TYPE, {"forceInput": is_force_input()}),
+                "text_b": (TEXT_TYPE, {"forceInput": is_force_input()}),
                 "mode": (["similarity","difference"],),
                 "tolerance": ("FLOAT", {"default":0.0,"min":0.0,"max":1.0,"step":0.01}),
             }
@@ -10426,7 +10443,7 @@ class WAS_Text_Random_Line:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
             }
         }
@@ -10512,7 +10529,7 @@ class WAS_Find:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
                 "substring": ("STRING", {"default": '', "multiline": False}),
                 "pattern": ("STRING", {"default": '', "multiline": False}),
             }
@@ -10542,7 +10559,7 @@ class WAS_Search_and_Replace:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
                 "find": ("STRING", {"default": '', "multiline": False}),
                 "replace": ("STRING", {"default": '', "multiline": False}),
             }
@@ -10573,7 +10590,7 @@ class WAS_Text_Shuffle:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
                 "separator": ("STRING", {"default": ',', "multiline": False}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
             }
@@ -10606,7 +10623,7 @@ class WAS_Text_Sort:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
                 "separator": ("STRING", {"default": ', ', "multiline": False}),
             }
         }
@@ -10652,9 +10669,9 @@ class WAS_Search_and_Replace_Input:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "find": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "replace": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
+                "find": (TEXT_TYPE, {"forceInput": is_force_input()}),
+                "replace": (TEXT_TYPE, {"forceInput": is_force_input()}),
             }
         }
 
@@ -10687,10 +10704,10 @@ class WAS_Search_and_Replace_Dictionary:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
                 "dictionary": ("DICT",),
                 "replacement_key": ("STRING", {"default": "__", "multiline": False}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "seed": ("INT", {"default": 1, "min": 0, "max": 0xffffffffffffffff}),
             }
         }
 
@@ -10700,21 +10717,18 @@ class WAS_Search_and_Replace_Dictionary:
     CATEGORY = "WAS Suite/Text/Search"
 
     def text_search_and_replace_dict(self, text, dictionary, replacement_key, seed):
-
         random.seed(seed)
-
-        # Parse Text
         new_text = text
 
         for term in dictionary.keys():
             tkey = f'{replacement_key}{term}{replacement_key}'
             tcount = new_text.count(tkey)
             for _ in range(tcount):
-                new_text = new_text.replace(tkey, random.choice(dictionary[term]), 1)
-                if seed > 0 or seed < 0:
-                    seed = seed + 1
+                new_text = new_text.replace(tkey, dictionary[term], 1)
+                if seed != 0:
+                    seed += 1
                     random.seed(seed)
-
+                    
         return (new_text, )
 
     @classmethod
@@ -10735,7 +10749,7 @@ class WAS_Text_Parse_NSP:
                 "mode": (["Noodle Soup Prompts", "Wildcards"],),
                 "noodle_key": ("STRING", {"default": '__', "multiline": False}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
             }
         }
 
@@ -10925,7 +10939,7 @@ class WAS_Text_to_Conditioning:
         return {
             "required": {
                 "clip": ("CLIP",),
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
             }
         }
 
@@ -10951,7 +10965,7 @@ class WAS_Text_Parse_Tokens:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
             }
         }
 
@@ -11027,8 +11041,8 @@ class WAS_Text_Add_Token_Input:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "token_name": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "token_value": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "token_name": (TEXT_TYPE, {"forceInput": is_force_input()}),
+                "token_value": (TEXT_TYPE, {"forceInput": is_force_input()}),
                 "print_current_tokens": (["false", "true"],),
             }
         }
@@ -11073,7 +11087,7 @@ class WAS_Text_to_Console:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
                 "label": ("STRING", {"default": f'Text Output', "multiline": False}),
             }
         }
@@ -11309,7 +11323,7 @@ class WAS_Text_To_String:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
             }
         }
 
@@ -11329,7 +11343,7 @@ class WAS_Text_To_Number:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text": (TEXT_TYPE, {"forceInput": is_force_input()}),
             }
         }
 
@@ -12576,7 +12590,7 @@ class WAS_Constant_Number:
                 "number": ("FLOAT", {"default": 0, "min": -18446744073709551615, "max": 18446744073709551615, "step": 0.01}),
             },
             "optional": {
-                "number_as_text": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "number_as_text": (TEXT_TYPE, {"forceInput": is_force_input()}),
             }
         }
 
@@ -13641,8 +13655,8 @@ class WAS_Text_Input_Switch:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text_a": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
-                "text_b": (TEXT_TYPE, {"forceInput": (True if TEXT_TYPE == 'STRING' else False)}),
+                "text_a": (TEXT_TYPE, {"forceInput": is_force_input()}),
+                "text_b": (TEXT_TYPE, {"forceInput": is_force_input()}),
                 "boolean": ("BOOLEAN", {"forceInput": True}),
             }
         }
