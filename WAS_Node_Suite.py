@@ -11454,6 +11454,10 @@ class WAS_BLIP_Model_Loader:
         # Attempt legacy support
         if blip_model in ("caption", "interrogate"):
             blip_model = "Salesforce/blip-image-captioning-base"
+        if os.path.exists("/stable-diffusion-cache/huggingface"):
+            blip_model = os.path.join("/stable-diffusion-cache/huggingface", blip_model)
+            vqa_model_id = os.path.join("/stable-diffusion-cache/huggingface", vqa_model_id)
+            blip_dir = None
 
         blip_model = BlipWrapper(caption_model_id=blip_model, vqa_model_id=vqa_model_id, device=device, cache_dir=blip_dir)
 
@@ -11577,8 +11581,12 @@ class WAS_CLIPSeg:
             inputs = clipseg_model[0]
             model = clipseg_model[1]
         else:
-            inputs = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
-            model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
+            if os.path.exists("/stable-diffusion-cache/huggingface"):
+                inputs = CLIPSegProcessor.from_pretrained("/stable-diffusion-cache/huggingface/CIDAS/clipseg-rd64-refined", cache_dir=None)
+                model = CLIPSegForImageSegmentation.from_pretrained("/stable-diffusion-cache/huggingface/CIDAS/clipseg-rd64-refined", cache_dir=None)
+            else:
+                inputs = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
+                model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
 
         if B == 1:
             image = tensor2pil(image)
@@ -11664,8 +11672,12 @@ class CLIPSeg2:
             processor = clipseg_model[0]
             model = clipseg_model[1]
         else:
-            processor = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined")
-            model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined")
+            if os.path.exists("/stable-diffusion-cache/huggingface"):
+                inputs = CLIPSegProcessor.from_pretrained("/stable-diffusion-cache/huggingface/CIDAS/clipseg-rd64-refined", cache_dir=None)
+                model = CLIPSegForImageSegmentation.from_pretrained("/stable-diffusion-cache/huggingface/CIDAS/clipseg-rd64-refined", cache_dir=None)
+            else:
+                inputs = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
+                model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
         # Move model to CUDA if requested
         if use_cuda and torch.cuda.is_available():
             model = model.to('cuda')
@@ -11842,9 +11854,12 @@ class WAS_CLIPSeg_Batch:
             prompts.append(text_f)
 
         cache = os.path.join(MODELS_DIR, 'clipseg')
-
-        inputs = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
-        model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
+        if os.path.exists("/stable-diffusion-cache/huggingface"):
+            inputs = CLIPSegProcessor.from_pretrained("/stable-diffusion-cache/huggingface/CIDAS/clipseg-rd64-refined", cache_dir=None)
+            model = CLIPSegForImageSegmentation.from_pretrained("/stable-diffusion-cache/huggingface/CIDAS/clipseg-rd64-refined", cache_dir=None)
+        else:
+            inputs = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
+            model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined", cache_dir=cache)
 
         with torch.no_grad():
             result = model(**inputs(text=prompts, images=images_pil, padding=True, return_tensors="pt"))
@@ -11923,9 +11938,12 @@ class WAS_SAM_Model_Loader:
 
         sam_file = os.path.join(sam_dir, model_filename)
         if not os.path.exists(sam_file):
-            cstr("Selected SAM model not found. Downloading...").msg.print()
-            r = requests.get(model_url, allow_redirects=True)
-            open(sam_file, 'wb').write(r.content)
+            if os.path.exists("/stable-diffusion-cache/models/sams"):
+                sam_file = os.path.join("/stable-diffusion-cache/models/sams", model_filename)
+            else:
+                cstr("Selected SAM model not found. Downloading...").msg.print()
+                r = requests.get(model_url, allow_redirects=True)
+                open(sam_file, 'wb').write(r.content)
 
         from segment_anything import build_sam_vit_h, build_sam_vit_l, build_sam_vit_b
 
